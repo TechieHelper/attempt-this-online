@@ -50,6 +50,7 @@
 #include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
@@ -219,13 +220,67 @@ block_cleanup_and_chld(int sigterm, sigset_t* old_set)
         perror("warning: sigprocmask");
 }
 
+int signal_manager(int fd, int child_pid) {
+    // clear flags
+    int result = fcntl(fd, F_SETFD, 0);
+    if (result == -1) {
+        perror("fcntl");
+        return 1;
+    }
+    // TODO(pxeger): is there a race condition involving PID recycling here?
+    while (true) {
+        // read one byte - that is, the signal number
+        uint8_t buf[1];
+        int len = read(fd, &buf, 1);
+        if (len == -1) {
+            // read failed
+            perror("read");
+            switch (errno) {
+            case EINTR:
+            case EIO:
+                continue;
+            default:
+                return 1;
+            }
+        } else if (len == 0) {
+            // EOF: the writing process closed descriptor
+            // TODO(pxeger): can read return 0 for a FIFO for any other reason?
+            return 0;
+        }
+
+        if (buf[0] == 0) {
+            // null signal: ignore
+            continue;
+        }
+
+        // send the signal
+        int result = kill(child_pid, buf[0]);
+
+        if (result == -1) {
+            if (errno == EINVAL) {
+                // invalid signal; ignore it
+            } else {
+                // no permission, or process doesn't exist, or whatever
+                perror("kill");
+                return 1;
+            }
+        }
+        DPRINTF(2, "%s %d\n", "delivered one signal:", buf[0]);
+    }
+    return 0;
+}
+
 int parse_int(char* string) {
     int value = 0;
-    if (string[0] < '1') {
-        // invalid integer (must be >= 0)
+    if (string[0] == '\0') {
+        // empty string
         exit(2);
     }
     for (int i = 0; string[i]; i++) {
+        if (i > 10) {
+            // integer too big
+            exit(2);
+        }
         if (string[i] < '0' || string[i] > '9') {
             // invalid integer
             exit(2);
@@ -238,21 +293,41 @@ int parse_int(char* string) {
 
 int main(int argc, char** argv)
 {
-    if (argc != 3) {
-        // file descriptor and timeout must be given as argument
+    if (argc != 4) {
+        // file descriptors and timeout must be given as argument
         return 2;
     }
-    int fd = parse_int(argv[1]);
-    timeout_secs = parse_int(argv[2]);
-    if (timeout_secs < 1 || timeout_secs > MAX_TIMEOUT_SECS) {
+    int control_fd = parse_int(argv[1]);
+    int fd = parse_int(argv[2]);
+
+    if (fd == control_fd) {
+        // should not be equal
+        return 2;
+    }
+    if (fd <= 2 || control_fd <= 2) {
+        // disallow std{in,out,err}
         return 2;
     }
 
+    // check fd is valid
     errno = 0;
     fcntl(fd, F_GETFD);
     if (errno) {
         perror("wrapper");
         return errno;
+    }
+
+    // check control_fd is valid
+    errno = 0;
+    fcntl(control_fd, F_GETFD);
+    if (errno) {
+        perror("wrapper");
+        return errno;
+    }
+
+    timeout_secs = parse_int(argv[3]);
+    if (timeout_secs < 1 || timeout_secs > MAX_TIMEOUT_SECS) {
+        return 2;
     }
 
     preserve_status = true;
@@ -288,10 +363,27 @@ int main(int argc, char** argv)
         signal(SIGTTOU, SIG_DFL);
 
         close(fd);
+        close(control_fd);
         execlp("/ATO/runner", "/ATO/runner", (char*)NULL);
+        // should never reach this point if exec succeeds
         perror("execlp");
         return 1;
     } else {
+        // start signal controller
+        int controller_pid = fork();
+        if (controller_pid == -1) {
+            perror("fork");
+            // in this case, we still need to handle timing out the child, even though we won't be able to handle signals from API
+            // so don't just quit
+            close(control_fd);
+        } else if (controller_pid == 0) {
+            // child: controller
+            return signal_manager(control_fd, monitored_pid);
+        } else {
+            // parent: handles timeout
+            close(control_fd);
+        }
+        close(control_fd);
         pid_t wait_result;
         int status;
         struct rusage rusage;
@@ -331,6 +423,12 @@ int main(int argc, char** argv)
                 /* shouldn't happen.  */
                 status = -1;
             }
+        }
+
+        result = kill(controller_pid, SIGKILL);
+        if (result == -1) {
+            perror("kill");
+            return 1;
         }
 
         result = getrusage(RUSAGE_CHILDREN, &rusage);

@@ -1,6 +1,6 @@
 import * as msgpack from '@msgpack/msgpack';
 
-const BASE_URL = 'https://ato.pxeger.com';
+const BASE_URL = 'https://staging.ato.pxeger.com';
 
 interface RunAPIResponse {
   stdout: Uint8Array;

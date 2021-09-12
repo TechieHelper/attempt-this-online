@@ -63,9 +63,8 @@ cgset -r pids.max=64 ATO/$client_id/$invocation_id
 # Open a file descriptor where we will write all the status information. See zshmisc(1) § Opening File Descriptors
 # Using Parameters for more details.
 exec {status_fd}>/run/ATO_o/$invocation_id/status
-# Open file descriptor for sandbox details, which will be written by bwrap immediately, to allow the process to be
-# killed manually
-exec {info_fd}>/run/ATO_o/$invocation_id/info
+# TODO(pxeger): explain
+exec {control_fd}</run/ATO_i/$invocation_id/control
 
 # (I wish it was possible to add comments between line continuations)
 # - env -i: start with a clean/empty environment
@@ -89,18 +88,17 @@ bwrap % \
     --unshare-all \
     --die-with-parent \
     --hostname ATO_sandbox \
-    --info-fd $info_fd \
     --ro-bind /run/ATO_i/$invocation_id/input /ATO/input \
     --ro-bind /run/ATO_i/$invocation_id/code /ATO/code \
     --ro-bind /run/ATO_i/$invocation_id/arguments /ATO/arguments \
     --ro-bind /run/ATO_i/$invocation_id/options /ATO/options \
-    /ATO/wrapper $status_fd $timeout \
+    /ATO/wrapper $control_fd $status_fd $timeout \
     1> >(head -c 128k > /run/ATO_o/$invocation_id/stdout) \
     2> >(head -c 32k > /run/ATO_o/$invocation_id/stderr)
 
 # close status FDs
 exec {status_fd}>&-
-exec {info_fd}>&-
+exec {control_fd}>&-
 
 # clean up cgroups
 flock -w 0 /run/lock/ATO/$client_id \
