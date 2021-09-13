@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import RedirectResponse, Response, PlainTextResponse
 from starlette.routing import Route
 
 from attempt_this_online import metadata
@@ -23,6 +23,8 @@ TRUST_PROXY_HEADER = False
 
 IP_ADDRESS_SALT = token_bytes()
 MAX_REQUEST_SIZE = 2 ** 16
+
+ALLOW_APL = "7ecc9d7877d84a6205e0fb972fc87f7d71a5af0339113a85655e3662b3528a01"
 
 
 class Invocation(BaseModel):
@@ -103,6 +105,9 @@ async def execute_once_route(request: Request) -> Response:
         invocation = Invocation(**data)
     except ValidationError as e:
         return Response(msgpack.dumps(e.errors()), 400)
+    if not sha256(request.cookies.get("allow_apl", "").encode()).hexdigest() == ALLOW_APL:
+        if invocation.language == "dyalog_apl":
+            return PlainTextResponse("Dyalog APL is not allowed", 403)
     if TRUST_PROXY_HEADER:
         ip = request.headers.get("X-Real-IP", request.client.host)
     else:
@@ -113,14 +118,29 @@ async def execute_once_route(request: Request) -> Response:
     return Response(msgpack.dumps(status), 200)
 
 
-async def get_metadata(_request) -> Response:
-    return Response(msgpack.dumps(metadata.languages))
+async def get_metadata(request) -> Response:
+    r = metadata.languages
+    if not sha256(request.cookies.get("allow_apl", "").encode()).hexdigest() == ALLOW_APL:
+        r = r.copy()
+        del r["dyalog_apl"]
+    return Response(msgpack.dumps(r))
+
+
+async def allow_apl(request) -> Response:
+    k = request.query_params.get("k", "")
+    r = PlainTextResponse(
+        "the ?k parameter has been set as a cookie; if it was the correct key, this will enable use of Dyalog APL",
+        200
+    )
+    r.set_cookie("allow_apl", k, httponly=True, secure=True)
+    return r
 
 
 app = Starlette(
     routes=[
         Route("/api/v0/execute", methods=["POST"], endpoint=execute_once_route),
         Route("/api/v0/metadata", methods=["GET"], endpoint=get_metadata),
+        Route("/api/v0/allow_apl", methods=["GET"], endpoint=allow_apl),
     ],
     exception_handlers={
         404: not_found_handler,

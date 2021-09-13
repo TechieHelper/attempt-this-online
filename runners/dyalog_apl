@@ -1,0 +1,28 @@
+#!/bin/sh
+#:name: Dyalog APL
+# TODO(pxeger): make a better Docker image for Dyalog APL (licensing?)
+#:image: dyalog/dyalog
+#:version: Latest
+#:url: https://www.dyalog.com/
+# (hacky but I haven't added special support for an APL charset) (TODO(pxeger): add that!)
+#:sbcs: true
+#:SE_class: apl
+
+export DYALOG=$(echo /opt/mdyalog/*/64/unicode)
+
+cd /ATO/context
+
+{
+	echo :namespace
+	cat /ATO/code
+	echo
+	echo :endnamespace
+} > /ATO/code.dyalog
+
+{
+    echo "⎕PW←32767"
+    echo "⎕TRAP←0 'E' '⍞←⎕DMX.(↑DM,¨'''' '''',⍨⊂Message,⍨'': ''/⍨×≢Message) ⋄ ⎕OFF(128⌊⎕EN)'"
+    echo "'#'⎕NS⎕FIX'file:///ATO/code.dyalog'"
+    cat /ATO/input
+    echo
+} | /ATO/yargs %1 /ATO/options /ATO/yargs %2 /ATO/arguments "$DYALOG/dyalog" %1 /ATO/code %2
