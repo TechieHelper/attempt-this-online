@@ -25,4 +25,4 @@ cd /ATO/context
     echo "'#'⎕NS⎕FIX'file:///ATO/code.dyalog'"
     cat /ATO/input
     echo
-} | /ATO/yargs %1 /ATO/options /ATO/yargs %2 /ATO/arguments "$DYALOG/dyalog" %1 /ATO/code %2
+} | /ATO/yargs %1 /ATO/options /ATO/yargs %2 /ATO/arguments "$DYALOG/dyalog" %1 -script %2
